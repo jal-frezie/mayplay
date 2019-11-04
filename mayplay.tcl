@@ -16,8 +16,9 @@
 
 package require http
 
-set powerCmd {echo PPOWER}
-set sleepCmd {echo SLEEP}
+exec ~/power
+set powerCmd {~/power 1}
+set sleepCmd {~/power 0}
 
 # this bit straight from Simile
 # tile creates: TkCaptionFont TkTooltipFont TkFixedFont TkHeadingFont 
@@ -39,19 +40,23 @@ font configure TkDefaultFont -size $niceSize
 font configure TkTextFont -size $niceSize
 font configure TkMenuFont -size $niceSize
 
-set base [open ~/.mayplay r]
-set hasGenres 1
-foreach pair [lrange [split [read $base] \n] 0 end-1] {
-    if {[llength $pair]==2} {set hasGenres 0}
-    if {!$hasGenres} {
-	set pair [linsert $pair 2 {}]
+set pairz {}
+set configFile ~/.mayplay
+if {[file exists $configFile]} {
+    set base [open $configFile r]
+    set hasGenres 1
+    foreach pair [lrange [split [read $base] \n] 0 end-1] {
+	if {[llength $pair]==2} {set hasGenres 0}
+	if {!$hasGenres} {
+	    set pair [linsert $pair 2 {}]
+	}
+	lappend pairz [lrange $pair 0 2]
+	foreach butNo [lrange $pair 3 end] {
+	    set presets($butNo) [lindex $pair 0]
+	}
     }
-    lappend pairz [lrange $pair 0 2]
-    foreach butNo [lrange $pair 3 end] {
-	set presets($butNo) [lindex $pair 0]
-    }
+    close $base
 }
-close $base
 
 set fil 0
 set vol 30
@@ -63,6 +68,8 @@ for {set q 0} {$q<10} {incr q} {
 }
 bind . <Up> {Preload -1}
 bind . <Down> {Preload 1}
+bind . <Left> {PlayFile PREV}
+bind . <Right> {PlayFile NEXT}
 bind . <Control-Up> RaiseVolume
 bind . <Control-Down> LowerVolume
 bind . <Control-space> {.butz.b invoke}
@@ -100,6 +107,7 @@ proc AddToMenus {lyne} {
 	if {![winfo exists $genreMenu]} {
 	    menu $genreMenu -tearoff 0
 	}
+	if {![catch {$genreMenu index [lindex $lyne 0]}]} return 
 	$genreMenu add command -label [lindex $lyne 0] \
 	    -command [list PlayFile [lindex $lyne 1]]
 	if {[$genreMenu index end]==2} { ;# worth including as a category
@@ -120,7 +128,8 @@ proc PlayMatch {} {
 	}
     } else {
 	if {![string length $sought]} {
-	    set sought [lindex [lindex $pairz $entree] 0]
+	    PlayFile [lindex [lindex $pairz $entree] 1]
+	    return
 	}
     }
 
@@ -162,7 +171,8 @@ proc Preload {off} {
 
     .e delete 0 end
     incr entree $off
-    .e insert 0 [lindex [lindex $pairz $entree] 0]
+    #    .e insert 0 [lindex [lindex $pairz $entree] 0]
+    PlayFile [lindex [lindex $pairz $entree] 1]
 }
 	       
 proc PlayPre {bun} {
@@ -195,7 +205,7 @@ bind .b <Configure> {.b.f config -height \
 
 pack [frame .t]
 pack [::ttk::combobox .t.cb -textvariable target \
-	  -width 10 -values [concat localhost barbie raspberrypi spacehopper] \
+	  -width 10 -values [concat localhost barbie raspberrypi spacehopper 10.42.0.1] \
 	  -state readonly] -side left
 set target localhost
 set gmnu .t.mb.m
@@ -244,8 +254,20 @@ proc PlayPastedFile {} {
     .e delete 0 end
 }
 
+array set history {all {} cur -1}
 proc PlayFile {url} {
-    global stm
+    global stm history
+
+    if {$url eq "PREV"} {
+	if {$history(cur) <= 0} return
+	set url [lindex $history(all) [incr history(cur) -1]]
+    } elseif {$url eq "NEXT"} {
+	if {$history(cur) >= [llength $history(all)]-1} return
+	set url [lindex $history(all) [incr history(cur)]]
+    } elseif {$url ne [lindex $history(all) $history(cur)]} {
+	lappend history(all) dummy ;# older tcltk cannot lreplace empty end
+	set history(all) [lreplace $history(all) [incr history(cur)] end $url]
+    }
 
     if {[info exists stm]} {
 	StopFile
@@ -415,8 +437,9 @@ proc TweakData {name url genre} {
 	while {$count>0} {
 	    incr count -1
 	    set line [lindex $pairz $count]
-	    if {[string equal $name [lindex $line 0]] || \
-		    [string equal $url [lindex $line 1]]} {
+	    # [string equal $name [lindex $line 0]] ||
+	    # different urls can have same name, keep both
+	    if {[string equal $url [lindex $line 1]]} {
 		set pairz [lreplace $pairz $count $count]
 	    }
 	}			    
@@ -437,7 +460,8 @@ puts "screech of brakes"
 	catch {
 	    flush $stm
 	}
-	close $stm
+	#	close $stm
+	# that might leave kworkers and it closes itself anyway
 	unset stm
     }
     .l config -text "No station"
